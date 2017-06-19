@@ -31,18 +31,30 @@
         android:layout_below="@+id/start"
         android:textSize="17sp"/>
     <android.support.v4.widget.NestedScrollView
-        android:layout_width="wrap_content"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_below="@+id/send">
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:weightSum="2">
+        <android.opengl.GLSurfaceView
+            android:id="@+id/glview_call"
+            android:layout_width="match_parent"
+            android:layout_height="200dp"
+            android:layout_weight="1"/>
         <TextView
             android:id="@+id/output"
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_below="@id/start"
-            android:layout_centerHorizontal="true"
             android:textSize="16sp"
-            android:layout_marginTop="30dp"/>
+            android:text="START"
+            android:layout_marginTop="30dp"
+            android:layout_weight="1"/>
+        </LinearLayout>
     </android.support.v4.widget.NestedScrollView>
+
 
 
 

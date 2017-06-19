@@ -3,12 +3,14 @@ package com.lazyfolkz.pe.webrtctest;
 import android.Manifest;
 import android.content.Context;
 import android.content.pm.PackageManager;
+import android.opengl.GLSurfaceView;
 import android.os.Environment;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 import android.util.Log;
+import android.view.SurfaceView;
 import android.widget.Button;
 import android.widget.TextView;
 
@@ -20,6 +22,8 @@ import com.lazyfolkz.pe.webrtctest.webrtc.observers.MySdpSetObserver;
 
 import org.json.JSONException;
 import org.json.JSONObject;
+import org.webrtc.AudioSource;
+import org.webrtc.AudioTrack;
 import org.webrtc.DataChannel;
 import org.webrtc.IceCandidate;
 import org.webrtc.MediaConstraints;
@@ -28,6 +32,12 @@ import org.webrtc.PeerConnection;
 import org.webrtc.PeerConnectionFactory;
 import org.webrtc.SdpObserver;
 import org.webrtc.SessionDescription;
+import org.webrtc.VideoCapturer;
+import org.webrtc.VideoCapturerAndroid;
+import org.webrtc.VideoRenderer;
+import org.webrtc.VideoRendererGui;
+import org.webrtc.VideoSource;
+import org.webrtc.VideoTrack;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -44,6 +54,9 @@ import java.util.List;
 
 public class MainActivity extends AppCompatActivity {
     private static final int PERMISSION_REQUEST_CODE = 1;
+    private static final String VIDEO_TRACK_ID = "myVideoTrack";
+    private static final String AUDIO_TRACK_ID = "myAudioTrack";
+    private static final String LOCAL_MEDIA_STREAM_ID = "myMediaStream";
     private Button start,send;
     private TextView output;
     private Socket mSocket;
@@ -53,6 +66,10 @@ public class MainActivity extends AppCompatActivity {
     DataChannel mDataChannel;
     MediaConstraints constraints;
     public static final String downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS) + "/";
+    private VideoCapturer videoCapturer;
+    private final List<VideoRenderer.Callbacks> remoteRenderers = new ArrayList<>();
+    private VideoTrack remoteVideoTrack;
+    private GLSurfaceView videoView;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -63,6 +80,12 @@ public class MainActivity extends AppCompatActivity {
         start = (Button) findViewById(R.id.start);
         send = (Button) findViewById(R.id.send);
         output = (TextView) findViewById(R.id.output);
+        videoView = (GLSurfaceView) findViewById(R.id.glview_call);
+
+        VideoRendererGui.setView(videoView, () -> {
+           Log.d("VDO","videoview set");
+
+        });
 
         requestPermission();
         // Initialise sockets
@@ -71,6 +94,21 @@ public class MainActivity extends AppCompatActivity {
         } catch (URISyntaxException e) {}
 
         // Listen for events
+        listenForSocketEvents();
+
+        //Bind actions to button clicks
+        start.setOnClickListener((view) -> {
+            mSocket.connect();
+            mSocket.emit("create or join",room);
+        });
+        send.setOnClickListener((view) -> {
+            sendThroughDataChannel("HIIIIIII");
+            sendFileThroughDataChannel(downloadDir+"tom.jpg");
+        });
+
+    }
+
+    private void listenForSocketEvents(){
         mSocket.on("created",(args)->{
             runOnUiThread(() -> {
                 output.append("\n Created room:" + args[0]);
@@ -101,17 +139,6 @@ public class MainActivity extends AppCompatActivity {
             });
             handleSignalingMessages(args[0].toString());
         });
-
-        //Bind to button click
-        start.setOnClickListener((view) -> {
-            mSocket.connect();
-            mSocket.emit("create or join",room);
-        });
-        send.setOnClickListener((view) -> {
-            sendThroughDataChannel("HIIIIIII");
-            sendFileThroughDataChannel(downloadDir+"tom.jpg");
-        });
-
     }
 
     private void sendMessage(JSONObject message){
@@ -190,10 +217,11 @@ public class MainActivity extends AppCompatActivity {
                     final String command = new String(bytes);
                     logOnUi("\n Message: "+command);
                 } else {
+                    logOnUi("\n File Received: ");
                     SimpleDateFormat simpleDateFormat = new SimpleDateFormat("dd-MM-yyyy-hh-mm-ss");
                     String format = simpleDateFormat.format(new Date());
                     writeBytearrayToFile("image"+format+".jpg",bytes);
-                    logOnUi("\n File Received: ");
+
                 }
 
             }
@@ -256,6 +284,10 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private void setupStreaming(PeerConnectionFactory peerConnectionFactory){
+
+    }
+
     private void createPeerConnection(){
 
         Context context = this;
@@ -273,6 +305,7 @@ public class MainActivity extends AppCompatActivity {
                 renderEGLContext);
         PeerConnectionFactory peerConnectionFactory = new PeerConnectionFactory();
 
+        setupStreaming(peerConnectionFactory);
 
         // Set ice servers
         List<PeerConnection.IceServer> iceServers = new ArrayList<>();
@@ -322,8 +355,16 @@ public class MainActivity extends AppCompatActivity {
             }
 
             @Override
-            public void onAddStream(MediaStream mediaStream) {
-
+            public void onAddStream(MediaStream stream) {
+                logOnUi("Stream RECEIVED");
+                if (stream.videoTracks.size() == 1) {
+                    remoteVideoTrack = stream.videoTracks.get(0);
+                    try {
+                        remoteVideoTrack.addRenderer(VideoRendererGui.createGui(0,0,100,100,VideoRendererGui.ScalingType.SCALE_ASPECT_FIT,true));
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                }
             }
 
             @Override
@@ -350,6 +391,37 @@ public class MainActivity extends AppCompatActivity {
                 constraints,
                 observer);
 
+
+        //AC: create a video track
+        String cameraDeviceName = VideoCapturerAndroid.getDeviceName(0);
+        String frontCameraDeviceName =
+                VideoCapturerAndroid.getNameOfFrontFacingDevice();
+
+        cameraDeviceName = frontCameraDeviceName;
+
+        Log.i("CAM", "Opening camera: " + cameraDeviceName);
+        videoCapturer = VideoCapturerAndroid.create(cameraDeviceName);
+        // First we create a VideoSource
+        VideoSource videoSource =
+                peerConnectionFactory.createVideoSource(videoCapturer, new MediaConstraints());
+        // Once we have that, we can create our VideoTrack
+        // Note that VIDEO_TRACK_ID can be any string that uniquely
+        // identifies that video track in your application
+        VideoTrack localVideoTrack =
+                peerConnectionFactory.createVideoTrack(VIDEO_TRACK_ID, videoSource);
+
+        AudioSource audioSource =
+                peerConnectionFactory.createAudioSource(new MediaConstraints());
+        AudioTrack localAudioTrack =
+                peerConnectionFactory.createAudioTrack(AUDIO_TRACK_ID, audioSource);
+
+
+        MediaStream mediaStream = peerConnectionFactory.createLocalMediaStream(LOCAL_MEDIA_STREAM_ID);
+        mediaStream.addTrack(localVideoTrack);
+        mediaStream.addTrack(localAudioTrack);
+        peerConnection.addStream(mediaStream);
+        logOnUi("Stream addedDDDDDDDDDDDDDDD");
+
         if(isInitiator){
             DataChannel.Init dcInit = new DataChannel.Init();
             dcInit.id = 1;
@@ -375,12 +447,14 @@ public class MainActivity extends AppCompatActivity {
             },constraints);
         }
 
+
     }
     private void logOnUi(String message){
         runOnUiThread(() -> {
             output.append("\n LOG :"+ message);
         });
     }
+
     public boolean checkPermission() {
         int result = ContextCompat.checkSelfPermission(this,
                 Manifest.permission.WRITE_EXTERNAL_STORAGE);
@@ -392,7 +466,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     public void requestPermission() {
-        ActivityCompat.requestPermissions(this,new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE},PERMISSION_REQUEST_CODE);
+        ActivityCompat.requestPermissions(this,new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE, Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO},PERMISSION_REQUEST_CODE);
     }
 
     @Override
@@ -400,10 +474,8 @@ public class MainActivity extends AppCompatActivity {
         switch (requestCode) {
             case PERMISSION_REQUEST_CODE:
                 if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-//                    Intent intent = new Intent(this, DownloadService.class);
-//                    startService(intent);
+
                 } else {
-//                    Snackbar.make(findViewById(R.id.coordinatorLayout),"Permission Denied, Please allow to proceed !", Snackbar.LENGTH_LONG).show();
                 }
                 break;
         }
